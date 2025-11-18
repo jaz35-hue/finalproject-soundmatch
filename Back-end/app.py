@@ -1,3 +1,6 @@
+from pathlib import Path
+import shutil
+
 from flask import Flask, render_template, url_for, redirect
 from flask_sqlalchemy import SQLAlchemy
 from flask_login import UserMixin, LoginManager, login_user, login_required, logout_user, current_user
@@ -5,19 +8,30 @@ from flask_wtf import FlaskForm
 from wtforms import StringField, PasswordField, SubmitField
 from wtforms.validators import InputRequired, Length, ValidationError
 from flask_bcrypt import Bcrypt
-import os
-import shutil
 
-app = Flask(__name__)
+BASE_DIR = Path(__file__).resolve().parent
+FRONTEND_DIR = (BASE_DIR.parent / "templates-front-end").resolve()
+STATIC_DIR = FRONTEND_DIR / "static"
+INSTANCE_DIR = BASE_DIR / "instance"
+
+# Ensure expected directories exist so deployments work out of the box
+FRONTEND_DIR.mkdir(parents=True, exist_ok=True)
+STATIC_DIR.mkdir(parents=True, exist_ok=True)
+INSTANCE_DIR.mkdir(parents=True, exist_ok=True)
+
+app = Flask(
+    __name__,
+    template_folder=str(FRONTEND_DIR),
+    static_folder=str(STATIC_DIR),
+)
 app.config['SECRET_KEY'] = 'SJZKEY2026@05'
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False  # Suppress deprecation warning
-basedir = os.path.abspath(os.path.dirname(__file__))
-db_path = os.path.join(basedir, 'database.db')
+db_path = BASE_DIR / 'database.db'
 
-# If an `instance/database.db` exists (from previous runs), copy it to project root
+# If an `instance/database.db` exists (from previous runs), copy it locally
 # so the app will continue using the same data. Only copy when the root DB is missing.
-instance_db_path = os.path.join(basedir, 'instance', 'database.db')
-if not os.path.exists(db_path) and os.path.exists(instance_db_path):
+instance_db_path = INSTANCE_DIR / 'database.db'
+if not db_path.exists() and instance_db_path.exists():
     try:
         shutil.copy2(instance_db_path, db_path)
     except Exception:
