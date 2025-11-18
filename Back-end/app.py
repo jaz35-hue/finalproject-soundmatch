@@ -1,5 +1,6 @@
-from pathlib import Path
+import os
 import shutil
+from pathlib import Path
 
 from flask import Flask, render_template, url_for, redirect
 from flask_sqlalchemy import SQLAlchemy
@@ -153,4 +154,9 @@ def register():
 if __name__ == '__main__':
     # Ensure the database tables exist before running
     init_db()
-    app.run(debug=True)
+
+    port = int(os.environ.get('PORT', 5000))
+    debug_env = os.environ.get('FLASK_DEBUG', '').lower()
+    debug = debug_env in {'1', 'true', 'yes'}
+
+    app.run(host='0.0.0.0', port=port, debug=debug)
