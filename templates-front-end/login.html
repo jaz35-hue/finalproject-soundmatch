@@ -9,6 +9,13 @@
 <body>
     <h1>Login Page</h1>
 
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+                {% for category, message in messages %}
+                    <div class="alert alert-{{ category }}">{{ message }}</div>
+                {% endfor %}
+            {% endif %}
+        {% endwith %}
 
         <form method="post" action="">
             {{ form.hidden_tag() }}
