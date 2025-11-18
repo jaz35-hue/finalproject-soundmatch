@@ -20,10 +20,21 @@
 
         <form method="post" action="">
             {{ form.hidden_tag() }}
-            {{ form.username }}
-            {{ form.email }}
-            {{ form.password }}
-            {{ form.submit() }}
+            <div>
+                <label for="username">Username:</label>
+                {{ form.username }}
+            </div>
+            <div>
+                <label for="email">Email:</label>
+                {{ form.email }}
+            </div>
+            <div>
+                <label for="password">Password:</label>
+                {{ form.password }}
+            </div>
+            <div>
+                {{ form.submit() }}
+            </div>
         </form>
         <a href="{{url_for('login')}}">Already have an account? Login here.</a><br>
 </body>

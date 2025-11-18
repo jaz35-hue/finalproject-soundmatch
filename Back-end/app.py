@@ -8,7 +8,7 @@ from flask_mail import Mail, Message
 from flask_sqlalchemy import SQLAlchemy
 from flask_login import UserMixin, LoginManager, login_user, login_required, logout_user, current_user
 from flask_wtf import FlaskForm
-from wtforms import StringField, PasswordField, SubmitField
+from wtforms import StringField, PasswordField, SubmitField, EmailField
 from wtforms.validators import InputRequired, Length, ValidationError, Email
 from flask_bcrypt import Bcrypt
 
@@ -84,8 +84,8 @@ def init_db():
 class RegisterForm(FlaskForm):
     username = StringField(validators=[InputRequired(), Length(min=4, max=20)],
                            render_kw={"placeholder": "Username"})
-    email = StringField(validators=[InputRequired(), Email()],
-                        render_kw={"placeholder": "Email"})
+    email = EmailField(validators=[InputRequired(), Email()],
+                       render_kw={"placeholder": "Email"})
     password = PasswordField(validators=[InputRequired(), Length(min=4, max=20)],
                              render_kw={"placeholder": "Password"})
     
