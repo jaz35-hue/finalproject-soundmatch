@@ -9,6 +9,7 @@ WTForms==3.2.1
 email-validator==2.1.1
 python-dotenv==1.0.0
 itsdangerous>=2.2.0
+requests==2.31.0
 SQLAlchemy==2.0.44
 greenlet==3.2.4
 typing_extensions==4.15.0

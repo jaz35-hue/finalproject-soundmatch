@@ -3,13 +3,16 @@ load_dotenv()
 import os
 import shutil
 import re
+import secrets
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from itsdangerous import URLSafeTimedSerializer, BadSignature, SignatureExpired
 
-from flask import Flask, render_template, url_for, redirect, flash, request
+from flask import Flask, render_template, url_for, redirect, flash, request, session
 from flask_mail import Mail, Message
 from flask_sqlalchemy import SQLAlchemy
+import requests
+from urllib.parse import urlencode
 from flask_login import UserMixin, LoginManager, login_user, login_required, logout_user, current_user
 from flask_wtf import FlaskForm
 from flask_limiter import Limiter
@@ -62,6 +65,15 @@ app.config.update(
 mail = Mail(app)
 serializer = URLSafeTimedSerializer(app.config['SECRET_KEY'])
 
+# Spotify OAuth configuration
+SPOTIFY_CLIENT_ID = os.environ.get('SPOTIFY_CLIENT_ID')
+SPOTIFY_CLIENT_SECRET = os.environ.get('SPOTIFY_CLIENT_SECRET')
+SPOTIFY_REDIRECT_URI = os.environ.get('SPOTIFY_REDIRECT_URI', 'http://localhost:5000/callback/spotify')
+SPOTIFY_AUTH_URL = 'https://accounts.spotify.com/authorize'
+SPOTIFY_TOKEN_URL = 'https://accounts.spotify.com/api/token'
+SPOTIFY_API_BASE_URL = 'https://api.spotify.com/v1'
+SPOTIFY_SCOPES = 'user-read-email user-read-private'
+
 # If an `instance/database.db` exists (from previous runs), copy it locally
 # so the app will continue using the same data. Only copy when the root DB is missing.
 instance_db_path = INSTANCE_DIR / 'database.db'
@@ -98,8 +110,8 @@ class User(db.Model, UserMixin):
     """User model with email verification and account lockout protection."""
     id = db.Column(db.Integer, primary_key=True)
     username = db.Column(db.String(20), unique=True, nullable=False, index=True)
-    email = db.Column(db.String(120), unique=True, nullable=False, index=True)
-    password = db.Column(db.String(255), nullable=False)
+    email = db.Column(db.String(120), unique=True, nullable=True, index=True)  # Made nullable for Spotify users
+    password = db.Column(db.String(255), nullable=True)  # Made nullable for Spotify OAuth users
     is_verified = db.Column(db.Boolean, default=False, nullable=False)
     verify_token = db.Column(db.String(255), nullable=True, index=True)
     token_created_at = db.Column(db.DateTime, nullable=True)
@@ -114,6 +126,13 @@ class User(db.Model, UserMixin):
     # Password reset fields
     reset_token = db.Column(db.String(255), nullable=True, index=True)
     reset_token_created_at = db.Column(db.DateTime, nullable=True)
+    
+    # Spotify OAuth fields
+    spotify_id = db.Column(db.String(255), unique=True, nullable=True, index=True)
+    spotify_access_token = db.Column(db.String(255), nullable=True)
+    spotify_refresh_token = db.Column(db.String(255), nullable=True)
+    spotify_token_expires_at = db.Column(db.DateTime, nullable=True)
+    auth_provider = db.Column(db.String(20), default='local', nullable=False)  # 'local' or 'spotify'
     
     def __repr__(self):
         return f'<User {self.username}>'
@@ -166,7 +185,9 @@ def check_and_update_schema():
             required_columns = {
                 'id', 'username', 'email', 'password', 'is_verified', 'verify_token',
                 'token_created_at', 'created_at', 'last_login', 'failed_login_attempts',
-                'account_locked', 'locked_until', 'reset_token', 'reset_token_created_at'
+                'account_locked', 'locked_until', 'reset_token', 'reset_token_created_at',
+                'spotify_id', 'spotify_access_token', 'spotify_refresh_token', 
+                'spotify_token_expires_at', 'auth_provider'
             }
             existing_columns = set(columns)
             
@@ -914,6 +935,140 @@ def reset_password(token):
         print(f"Error in reset_password: {str(e)}")
         flash('An error occurred. Please try again.', 'danger')
         return redirect(url_for('forgot_password'))
+
+
+# Spotify OAuth Routes
+@app.route('/login/spotify')
+def login_spotify():
+    """Initiate Spotify OAuth flow."""
+    if not SPOTIFY_CLIENT_ID:
+        flash('Spotify login is not configured. Please use regular login.', 'warning')
+        return redirect(url_for('login'))
+    
+    # Generate state token for CSRF protection
+    state = secrets.token_urlsafe(16)
+    session['oauth_state'] = state
+    
+    # Build authorization URL
+    params = {
+        'client_id': SPOTIFY_CLIENT_ID,
+        'response_type': 'code',
+        'redirect_uri': SPOTIFY_REDIRECT_URI,
+        'state': state,
+        'scope': SPOTIFY_SCOPES,
+        'show_dialog': 'false'
+    }
+    
+    auth_url = f"{SPOTIFY_AUTH_URL}?{urlencode(params)}"
+    return redirect(auth_url)
+
+
+@app.route('/callback/spotify')
+def spotify_callback():
+    """Handle Spotify OAuth callback."""
+    # Verify state to prevent CSRF
+    state = request.args.get('state')
+    if not state or state != session.get('oauth_state'):
+        flash('Invalid state parameter. Please try again.', 'danger')
+        return redirect(url_for('login'))
+    
+    # Clear the state
+    session.pop('oauth_state', None)
+    
+    # Check for errors
+    error = request.args.get('error')
+    if error:
+        flash(f'Spotify authorization failed: {error}', 'danger')
+        return redirect(url_for('login'))
+    
+    # Get authorization code
+    code = request.args.get('code')
+    if not code:
+        flash('No authorization code received.', 'danger')
+        return redirect(url_for('login'))
+    
+    try:
+        # Exchange code for access token
+        token_data = {
+            'grant_type': 'authorization_code',
+            'code': code,
+            'redirect_uri': SPOTIFY_REDIRECT_URI,
+            'client_id': SPOTIFY_CLIENT_ID,
+            'client_secret': SPOTIFY_CLIENT_SECRET
+        }
+        
+        token_response = requests.post(SPOTIFY_TOKEN_URL, data=token_data)
+        token_response.raise_for_status()
+        token_info = token_response.json()
+        
+        access_token = token_info['access_token']
+        refresh_token = token_info.get('refresh_token')
+        expires_in = token_info.get('expires_in', 3600)
+        
+        # Get user profile from Spotify
+        headers = {'Authorization': f'Bearer {access_token}'}
+        profile_response = requests.get(f'{SPOTIFY_API_BASE_URL}/me', headers=headers)
+        profile_response.raise_for_status()
+        profile = profile_response.json()
+        
+        spotify_id = profile['id']
+        spotify_email = profile.get('email')
+        display_name = profile.get('display_name', spotify_id)
+        
+        # Check if user exists
+        user = User.query.filter_by(spotify_id=spotify_id).first()
+        
+        if user:
+            # Update existing user's tokens
+            user.spotify_access_token = access_token
+            user.spotify_refresh_token = refresh_token
+            user.spotify_token_expires_at = datetime.now(timezone.utc) + timedelta(seconds=expires_in)
+            user.last_login = datetime.now(timezone.utc)
+            db.session.commit()
+            
+            login_user(user, remember=False)
+            flash(f'Welcome back, {user.username}!', 'success')
+            return redirect(url_for('dashboard'))
+        else:
+            # Create new user
+            # Generate unique username from display_name
+            base_username = ''.join(c for c in display_name if c.isalnum() or c == '_')[:20]
+            username = base_username
+            counter = 1
+            while User.query.filter_by(username=username).first():
+                username = f"{base_username}{counter}"
+                counter += 1
+            
+            new_user = User(
+                username=username,
+                email=spotify_email,
+                password=None,  # No password for OAuth users
+                is_verified=True,  # Spotify users are auto-verified
+                spotify_id=spotify_id,
+                spotify_access_token=access_token,
+                spotify_refresh_token=refresh_token,
+                spotify_token_expires_at=datetime.now(timezone.utc) + timedelta(seconds=expires_in),
+                auth_provider='spotify',
+                created_at=datetime.now(timezone.utc)
+            )
+            
+            db.session.add(new_user)
+            db.session.commit()
+            
+            login_user(new_user, remember=False)
+            flash(f'Welcome to SoundMatch, {new_user.username}! Your account has been created via Spotify.', 'success')
+            return redirect(url_for('dashboard'))
+    
+    except requests.RequestException as e:
+        print(f"Spotify API error: {str(e)}")
+        flash('Failed to connect to Spotify. Please try again.', 'danger')
+        return redirect(url_for('login'))
+    except Exception as e:
+        print(f"Error in Spotify callback: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        flash('An error occurred during Spotify login. Please try again.', 'danger')
+        return redirect(url_for('login'))
 
 
 # Error handlers

@@ -53,5 +53,22 @@
         </form>
         <p><a href="{{url_for('forgot_password')}}">Forgot your password?</a></p>
         <p><a href="{{url_for('register')}}">Don't have an account? Register here.</a></p>
+        
+        <hr style="margin: 20px 0;">
+        
+        <div style="text-align: center;">
+            <p><strong>Or sign in with:</strong></p>
+            <a href="{{url_for('login_spotify')}}" 
+               style="display: inline-block; 
+                      background-color: #1DB954; 
+                      color: white; 
+                      padding: 12px 24px; 
+                      text-decoration: none; 
+                      border-radius: 25px; 
+                      font-weight: bold;
+                      margin: 10px 0;">
+                🎵 Login with Spotify
+            </a>
+        </div>
 </body>
 </html>
