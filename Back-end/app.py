@@ -103,14 +103,33 @@ class RegisterForm(FlaskForm):
 
 
 def send_verification_email(user):
-    token = serializer.dumps(user.email, salt='email-verify')
-    user.verify_token = token
-    db.session.commit()
+    """Send verification email to user. Returns True if successful, False otherwise."""
+    try:
+        token = serializer.dumps(user.email, salt='email-verify')
+        user.verify_token = token
+        db.session.commit()
 
-    verify_url = url_for('verify_email', token=token, _external=True)
-    msg = Message("Verify your SoundMatch account", recipients=[user.email])
-    msg.body = f"Hi {user.username}, confirm your account: {verify_url}"
-    mail.send(msg)
+        # Check if mail is configured
+        if not app.config.get('MAIL_USERNAME') or not app.config.get('MAIL_PASSWORD'):
+            print("Warning: Email not configured. Skipping email verification.")
+            return False
+
+        verify_url = url_for('verify_email', token=token, _external=True)
+        msg = Message("Verify your SoundMatch account", recipients=[user.email])
+        msg.body = f"Hi {user.username}, confirm your account: {verify_url}"
+        mail.send(msg)
+        return True
+    except Exception as e:
+        print(f"Error sending verification email: {str(e)}")
+        db.session.rollback()
+        # Still commit the token even if email fails
+        try:
+            token = serializer.dumps(user.email, salt='email-verify')
+            user.verify_token = token
+            db.session.commit()
+        except Exception:
+            pass
+        return False
 
 
 
@@ -177,13 +196,33 @@ def register():
             )
             db.session.add(new_user)
             db.session.commit()
-            send_verification_email(new_user)
-            flash('Registration successful! Please check your email to verify your account.', 'info')
+            
+            # Try to send verification email, but don't fail registration if it fails
+            email_sent = send_verification_email(new_user)
+            
+            if email_sent:
+                flash('Registration successful! Please check your email to verify your account.', 'info')
+            else:
+                # If email isn't configured, auto-verify the user so they can log in
+                new_user.is_verified = True
+                new_user.verify_token = None
+                db.session.commit()
+                flash('Registration successful! Email verification is not configured. You can log in now.', 'success')
+            
             return redirect(url_for('login'))
         except Exception as e:
             db.session.rollback()
-            # Handle database errors (e.g., duplicate username constraint)
-            form.username.errors.append('An error occurred. Please try again.')
+            print(f"Registration error: {str(e)}")
+            # Handle database errors (e.g., duplicate username/email)
+            if 'UNIQUE constraint failed' in str(e) or 'IntegrityError' in str(e):
+                if 'username' in str(e).lower():
+                    form.username.errors.append('Username already exists.')
+                elif 'email' in str(e).lower():
+                    form.email.errors.append('Email already registered.')
+                else:
+                    form.username.errors.append('Username or email already exists.')
+            else:
+                form.username.errors.append('An error occurred. Please try again.')
 
     return render_template('register.html', form=form)
 
