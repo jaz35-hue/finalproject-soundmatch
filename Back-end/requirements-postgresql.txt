@@ -1,0 +1,13 @@
+# PostgreSQL dependencies - Install only when migrating to PostgreSQL
+# 
+# For Windows: You may need to install PostgreSQL client libraries first
+# Download from: https://www.postgresql.org/download/windows/
+# Or use pre-built wheels: pip install psycopg2-binary --only-binary :all:
+#
+# For Linux/Mac: Usually installs without issues
+# pip install psycopg2-binary
+#
+# For Render/Production: Will install automatically from main requirements.txt
+
+psycopg2-binary==2.9.9
+
