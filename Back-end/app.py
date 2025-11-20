@@ -92,43 +92,72 @@ class RegisterForm(FlaskForm):
     submit = SubmitField("Register")
 
     def validate_username(self, username):
-        existing_user = User.query.filter_by(username=username.data).first()
-        if existing_user:
-            raise ValidationError("That username already exists. Please choose a different one.")
+        try:
+            existing_user = User.query.filter_by(username=username.data).first()
+            if existing_user:
+                raise ValidationError("That username already exists. Please choose a different one.")
+        except Exception as e:
+            # If database query fails, log but don't block registration
+            print(f"Error validating username: {str(e)}")
 
     def validate_email(self, email):
-        existing_email = User.query.filter_by(email=email.data).first()
-        if existing_email:
-            raise ValidationError("That email is already registered.")
+        try:
+            existing_email = User.query.filter_by(email=email.data.lower()).first()
+            if existing_email:
+                raise ValidationError("That email is already registered.")
+        except Exception as e:
+            # If database query fails, log but don't block registration
+            print(f"Error validating email: {str(e)}")
 
 
 def send_verification_email(user):
     """Send verification email to user. Returns True if successful, False otherwise."""
     try:
+        # Check if mail is configured first
+        mail_username = app.config.get('MAIL_USERNAME')
+        mail_password = app.config.get('MAIL_PASSWORD')
+        
+        if not mail_username or not mail_password:
+            print("Warning: Email not configured. MAIL_USERNAME or MAIL_PASSWORD missing.")
+            return False
+
+        # Generate token
         token = serializer.dumps(user.email, salt='email-verify')
         user.verify_token = token
         db.session.commit()
 
-        # Check if mail is configured
-        if not app.config.get('MAIL_USERNAME') or not app.config.get('MAIL_PASSWORD'):
-            print("Warning: Email not configured. Skipping email verification.")
-            return False
-
-        verify_url = url_for('verify_email', token=token, _external=True)
-        msg = Message("Verify your SoundMatch account", recipients=[user.email])
-        msg.body = f"Hi {user.username}, confirm your account: {verify_url}"
+        # Create verification URL (already in request context, but ensure it works)
+        try:
+            verify_url = url_for('verify_email', token=token, _external=True)
+        except RuntimeError:
+            # Fallback if not in request context
+            with app.app_context():
+                verify_url = url_for('verify_email', token=token, _external=True)
+        
+        # Create and send message
+        msg = Message(
+            subject="Verify your SoundMatch account",
+            recipients=[user.email],
+            body=f"Hi {user.username},\n\nPlease click the following link to verify your account:\n{verify_url}\n\nThis link will expire in 1 hour.\n\nIf you didn't create this account, please ignore this email."
+        )
+        
         mail.send(msg)
+        print(f"Verification email sent to {user.email}")
         return True
+        
     except Exception as e:
         print(f"Error sending verification email: {str(e)}")
-        db.session.rollback()
-        # Still commit the token even if email fails
+        import traceback
+        traceback.print_exc()
+        
+        # Still save the token even if email fails
         try:
             token = serializer.dumps(user.email, salt='email-verify')
             user.verify_token = token
             db.session.commit()
-        except Exception:
-            pass
+            print(f"Token saved for user {user.username} despite email failure")
+        except Exception as token_error:
+            print(f"Error saving token: {str(token_error)}")
         return False
 
 
@@ -188,10 +217,26 @@ def register():
 
     if form.validate_on_submit():
         try:
+            # Normalize email to lowercase
+            email = form.email.data.lower().strip()
+            username = form.username.data.strip()
+            
+            # Double-check for duplicates (in case validation missed it)
+            existing_username = User.query.filter_by(username=username).first()
+            if existing_username:
+                form.username.errors.append('Username already exists.')
+                return render_template('register.html', form=form)
+            
+            existing_email = User.query.filter_by(email=email).first()
+            if existing_email:
+                form.email.errors.append('Email already registered.')
+                return render_template('register.html', form=form)
+            
+            # Create new user
             hashed_password = bcrypt.generate_password_hash(form.password.data)
             new_user = User(
-                username=form.username.data,
-                email=form.email.data.lower(),
+                username=username,
+                email=email,
                 password=hashed_password
             )
             db.session.add(new_user)
@@ -201,7 +246,7 @@ def register():
             email_sent = send_verification_email(new_user)
             
             if email_sent:
-                flash('Registration successful! Please check your email to verify your account.', 'info')
+                flash('Registration successful! Please check your email to verify your account.', 'success')
             else:
                 # If email isn't configured, auto-verify the user so they can log in
                 new_user.is_verified = True
@@ -210,18 +255,26 @@ def register():
                 flash('Registration successful! Email verification is not configured. You can log in now.', 'success')
             
             return redirect(url_for('login'))
+            
         except Exception as e:
             db.session.rollback()
+            import traceback
+            error_trace = traceback.format_exc()
             print(f"Registration error: {str(e)}")
+            print(f"Traceback: {error_trace}")
+            
             # Handle database errors (e.g., duplicate username/email)
-            if 'UNIQUE constraint failed' in str(e) or 'IntegrityError' in str(e):
-                if 'username' in str(e).lower():
+            error_str = str(e).lower()
+            if 'unique constraint failed' in error_str or 'integrityerror' in error_str:
+                if 'username' in error_str:
                     form.username.errors.append('Username already exists.')
-                elif 'email' in str(e).lower():
+                elif 'email' in error_str:
                     form.email.errors.append('Email already registered.')
                 else:
                     form.username.errors.append('Username or email already exists.')
+                    form.email.errors.append('Username or email already exists.')
             else:
+                flash(f'An error occurred during registration: {str(e)}', 'danger')
                 form.username.errors.append('An error occurred. Please try again.')
 
     return render_template('register.html', form=form)
@@ -232,18 +285,55 @@ def verify_email(token):
     try:
         email = serializer.loads(token, salt='email-verify', max_age=3600)
     except SignatureExpired:
-        flash('Verification link expired, please request a new one.', 'warning')
+        flash('Verification link expired. Please request a new one.', 'warning')
         return redirect(url_for('login'))
     except BadSignature:
         flash('Invalid verification token.', 'danger')
         return redirect(url_for('login'))
+    except Exception as e:
+        print(f"Error verifying token: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        flash('An error occurred while verifying your email.', 'danger')
+        return redirect(url_for('login'))
     
-    user = User.query.filter_by(email=email).first_or_404()
-    user.is_verified = True
-    user.verify_token = None
-    db.session.commit()
-    flash('Email confirmed! You can log in now.', 'success')
-    return redirect(url_for('login'))
+    try:
+        user = User.query.filter_by(email=email).first()
+        if not user:
+            flash('User not found.', 'danger')
+            return redirect(url_for('login'))
+        
+        user.is_verified = True
+        user.verify_token = None
+        db.session.commit()
+        flash('Email confirmed! You can log in now.', 'success')
+        return redirect(url_for('login'))
+    except Exception as e:
+        db.session.rollback()
+        print(f"Error updating user verification status: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        flash('An error occurred while verifying your email.', 'danger')
+        return redirect(url_for('login'))
+
+
+# Error handler for 500 errors
+@app.errorhandler(500)
+def internal_error(error):
+    db.session.rollback()
+    import traceback
+    error_trace = traceback.format_exc()
+    print(f"500 Error: {str(error)}")
+    print(f"Traceback: {error_trace}")
+    flash('An internal server error occurred. Please try again later.', 'danger')
+    return redirect(url_for('home')), 500
+
+
+# Error handler for 404 errors
+@app.errorhandler(404)
+def not_found_error(error):
+    flash('Page not found.', 'warning')
+    return redirect(url_for('home')), 404
 
 
 if __name__ == '__main__':
