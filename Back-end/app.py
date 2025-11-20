@@ -55,29 +55,9 @@ if not db_path.exists() and instance_db_path.exists():
         # ignore copy errors; DB creation will proceed later
         pass
 
-# Database configuration - supports both SQLite (dev) and PostgreSQL (production)
-database_url = os.environ.get('DATABASE_URL')
-
-if database_url:
-    # PostgreSQL (production) - Render provides DATABASE_URL
-    # SQLAlchemy needs postgresql:// (not postgres://)
-    if database_url.startswith('postgres://'):
-        database_url = database_url.replace('postgres://', 'postgresql://', 1)
-    
-    # Check if psycopg2 is available (for PostgreSQL)
-    try:
-        import psycopg2
-        app.config['SQLALCHEMY_DATABASE_URI'] = database_url
-        print("Using PostgreSQL database (production)")
-    except ImportError:
-        print("⚠️  WARNING: DATABASE_URL set but psycopg2-binary not installed!")
-        print("⚠️  Falling back to SQLite. Install psycopg2-binary for PostgreSQL support.")
-        print("⚠️  Run: pip install psycopg2-binary --only-binary :all:")
-        app.config['SQLALCHEMY_DATABASE_URI'] = f"sqlite:///{db_path}"
-else:
-    # SQLite (local development)
-    app.config['SQLALCHEMY_DATABASE_URI'] = f"sqlite:///{db_path}"
-    print(f"Using SQLite database (development): {db_path}")
+# Database configuration - SQLite only
+app.config['SQLALCHEMY_DATABASE_URI'] = f"sqlite:///{db_path}"
+print(f"Using SQLite database: {db_path}")
 
 bcrypt = Bcrypt(app)
 db = SQLAlchemy(app)
@@ -147,15 +127,6 @@ class User(db.Model, UserMixin):
 def check_and_update_schema():
     """Check if database schema is up to date and recreate if needed."""
     with app.app_context():
-        # Skip automatic schema updates for PostgreSQL (use migrations instead)
-        database_url = os.environ.get('DATABASE_URL', '')
-        if database_url and 'postgresql' in database_url:
-            print("PostgreSQL detected - skipping automatic schema update.")
-            print("Use Flask-Migrate for schema changes in production.")
-            # Just ensure tables exist
-            db.create_all()
-            return True
-        
         from sqlalchemy import inspect, text
         
         inspector = inspect(db.engine)

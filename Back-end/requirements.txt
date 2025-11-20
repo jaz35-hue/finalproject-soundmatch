@@ -9,5 +9,4 @@ python-dotenv==1.0.0
 SQLAlchemy==2.0.44
 greenlet==3.2.4
 typing_extensions==4.15.0
-# psycopg2-binary==2.9.9  # Optional: Only needed for PostgreSQL. Install separately when migrating to PostgreSQL.
 
