@@ -3,7 +3,7 @@ load_dotenv()
 import os
 import shutil
 import re
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from itsdangerous import URLSafeTimedSerializer, BadSignature, SignatureExpired
 
@@ -122,7 +122,7 @@ class User(db.Model, UserMixin):
         """Check if account is currently locked."""
         if not self.account_locked:
             return False
-        if self.locked_until and datetime.utcnow() > self.locked_until:
+        if self.locked_until and datetime.now(timezone.utc) > self.locked_until:
             # Lock expired, unlock account
             self.account_locked = False
             self.locked_until = None
@@ -137,7 +137,7 @@ class User(db.Model, UserMixin):
         
         if self.failed_login_attempts >= max_attempts:
             self.account_locked = True
-            self.locked_until = datetime.utcnow() + timedelta(minutes=lockout_duration_minutes)
+            self.locked_until = datetime.now(timezone.utc) + timedelta(minutes=lockout_duration_minutes)
             print(f"Account {self.username} locked until {self.locked_until}")
         
         db.session.commit()
@@ -217,7 +217,7 @@ def generate_verification_token(user):
     payload = {
         'email': user.email,
         'user_id': user.id,
-        'timestamp': datetime.utcnow().isoformat()
+        'timestamp': datetime.now(timezone.utc).isoformat()
     }
     token = serializer.dumps(payload, salt='email-verify')
     return token
@@ -246,7 +246,7 @@ def send_verification_email(user, resend=False):
         # Generate secure token
         token = generate_verification_token(user)
         user.verify_token = token
-        user.token_created_at = datetime.utcnow()
+        user.token_created_at = datetime.now(timezone.utc)
         db.session.commit()
 
         # Create verification URL
@@ -330,12 +330,12 @@ def send_password_reset_email(user):
         payload = {
             'email': user.email,
             'user_id': user.id,
-            'timestamp': datetime.utcnow().isoformat(),
+            'timestamp': datetime.now(timezone.utc).isoformat(),
             'type': 'password_reset'
         }
         token = serializer.dumps(payload, salt='password-reset')
         user.reset_token = token
-        user.reset_token_created_at = datetime.utcnow()
+        user.reset_token_created_at = datetime.now(timezone.utc)
         db.session.commit()
 
         # Create reset URL
@@ -569,7 +569,7 @@ def login():
             
             # Check if account is locked
             if user and user.is_account_locked():
-                remaining_time = (user.locked_until - datetime.utcnow()).total_seconds() / 60
+                remaining_time = (user.locked_until - datetime.now(timezone.utc)).total_seconds() / 60
                 flash(f'Account is temporarily locked due to too many failed login attempts. Please try again in {int(remaining_time)} minutes.', 'danger')
                 return render_template('login.html', form=form)
             
@@ -585,7 +585,7 @@ def login():
                 user.reset_failed_login_attempts()
                 
                 # Update last login
-                user.last_login = datetime.utcnow()
+                user.last_login = datetime.now(timezone.utc)
                 db.session.commit()
                 
                 # Log user in
@@ -667,7 +667,7 @@ def register():
                 email=email,
                 password=hashed_password,
                 is_verified=False,
-                created_at=datetime.utcnow()
+                created_at=datetime.now(timezone.utc)
             )
             db.session.add(new_user)
             db.session.commit()
@@ -795,7 +795,7 @@ def resend_verification():
             
             # Check rate limiting (prevent abuse)
             if user.token_created_at:
-                time_since_last = datetime.utcnow() - user.token_created_at
+                time_since_last = datetime.now(timezone.utc) - user.token_created_at
                 if time_since_last < timedelta(minutes=5):
                     flash('Please wait a few minutes before requesting another verification email.', 'warning')
                     return render_template('resend_verification.html', form=form)
