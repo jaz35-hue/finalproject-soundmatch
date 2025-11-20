@@ -74,11 +74,62 @@ class User(db.Model, UserMixin):
     verify_token = db.Column(db.String(120), nullable=True)
 
 
+def check_and_update_schema():
+    """Check if database schema is up to date and recreate if needed."""
+    with app.app_context():
+        from sqlalchemy import inspect, text
+        
+        inspector = inspect(db.engine)
+        tables = inspector.get_table_names()
+        
+        if 'user' in tables:
+            # Check existing columns
+            columns = [col['name'] for col in inspector.get_columns('user')]
+            print(f"Existing columns in user table: {columns}")
+            
+            # Required columns for current schema
+            required_columns = {'id', 'username', 'email', 'password', 'is_verified', 'verify_token'}
+            existing_columns = set(columns)
+            
+            # Check if all required columns exist
+            missing_columns = required_columns - existing_columns
+            
+            if missing_columns:
+                print(f"Missing columns detected: {missing_columns}")
+                print("Recreating database with updated schema...")
+                
+                # Drop and recreate the table
+                try:
+                    db.drop_all()
+                    db.create_all()
+                    print("Database schema updated successfully!")
+                    return True
+                except Exception as e:
+                    print(f"Error recreating tables: {str(e)}")
+                    return False
+            else:
+                print("Database schema is up to date.")
+                return True
+        return True
+
+
 def init_db():
     """Initialize the database and create all tables."""
     with app.app_context():
+        # First, try to update schema if table exists
+        schema_updated = check_and_update_schema()
+        
+        # Create all tables (will only create if they don't exist)
         db.create_all()
-        print("Database tables created successfully!")
+        
+        if not schema_updated:
+            # If schema update failed, drop and recreate
+            print("Schema update failed. Dropping and recreating tables...")
+            db.drop_all()
+            db.create_all()
+            print("Database tables recreated successfully!")
+        else:
+            print("Database tables created/updated successfully!")
 
 
 class RegisterForm(FlaskForm):
